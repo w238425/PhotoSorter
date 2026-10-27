@@ -1,0 +1,1 @@
+fatal: unable to access 'https://github.com/w238425/PhotoSorter.git/': CONNECT tunnel failed, response 502

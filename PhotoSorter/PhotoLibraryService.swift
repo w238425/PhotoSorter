@@ -176,8 +176,14 @@ final class PhotoLibraryService: ObservableObject {
     func classifyLevel(_ s: PhotoScores, tags: [String] = []) -> ExposureLevel {
         let t = thresholds
         let boost = TagEngine.exposureBoost(tags)
-        // 有人脸 / 明显皮肤 / 暴露类标签 = 写真类
-        guard s.faceCount >= 1 || s.skinRatio >= t.t2SkinLow || boost > 0 else { return .normal }
+        // 负标签否决：CLIP 认出风景/食物/宠物/截图等非人物内容 → 直接非写真。
+        // 否决压过人脸误检（动物毛色会触发肤色规则、DNN/Vision 偶发动物误脸），
+        // 但暴露类标签（boost>0）可推翻否决（如"海滩+比基尼"人像）。
+        // 代价：人+宠物合影会被归入非写真，可长按手动纠错。
+        let negativeTags = ["风景", "食物", "宠物", "屏幕截图"]
+        let negative = tags.contains(where: { negativeTags.contains($0) })
+        if negative && boost == 0 { return .normal }
+        guard s.faceCount >= 1 || s.skinRatio >= t.t2SkinLow else { return .normal }
         if s.skinRatio > t.t2SkinHigh || boost >= 3 { return .explicit }
         if s.skinRatio >= t.t2SkinLow || boost >= 1 { return .revealing }
         return .portrait

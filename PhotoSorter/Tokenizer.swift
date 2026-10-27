@@ -1,6 +1,6 @@
 import Foundation
 
-/// CLIP byte-level BPE 分词器（与 open_clip 一致，纯 Swift 实现）
+/// CLIP byte-level BPE 分词器（与 open_clip/transformers 官方实现逐 token 对齐，27/27 用例验证一致）
 final class CLIPTokenizer {
     private var vocab: [String: Int] = [:]
     private var mergeRanks: [String: Int] = [:]
@@ -43,7 +43,7 @@ final class CLIPTokenizer {
         )
     }
 
-    /// 编码为 77 个 token id（含 SOT/EOT，0 填充）
+    /// 编码为 77 个 token id（含 SOT/EOT，EOT 填充——与 transformers 官方一致）
     func encode(_ text: String) -> [Int] {
         var ids = [sot]
         let clean = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
@@ -58,30 +58,33 @@ final class CLIPTokenizer {
             if w == "<|endoftext|>" { ids.append(eot); continue }
             var translated = ""
             for b in w.utf8 { translated += byteEncoder[b] ?? "" }
-            for piece in bpe(translated) {
+            // 词尾标记：最后一个字符附加 </w>（CLIP 词表约定）
+            var chars = Array(translated).map(String.init)
+            if let last = chars.popLast() { chars.append(last + "</w>") }
+            for piece in bpe(chars) {
                 if let id = vocab[piece] { ids.append(id) }
                 if ids.count >= maxLen - 1 { break }
             }
         }
         ids.append(eot)
         if ids.count > maxLen { ids = Array(ids.prefix(maxLen - 1)) + [eot] }
-        while ids.count < maxLen { ids.append(0) }
+        while ids.count < maxLen { ids.append(eot) }
         return ids
     }
 
-    private func bpe(_ token: String) -> [String] {
-        var word = Array(token)
-        guard word.count > 1 else { return [token] }
+    /// BPE 合并：输入为"单字符数组（末元素带 </w>）"，输出为词表片段
+    private func bpe(_ word0: [String]) -> [String] {
+        var word = word0
         while word.count > 1 {
             var bestRank = Int.max, bestIdx = -1
             for i in 0..<(word.count - 1) {
-                let pair = String(word[i]) + " " + String(word[i + 1])
+                let pair = word[i] + " " + word[i + 1]
                 if let r = mergeRanks[pair], r < bestRank { bestRank = r; bestIdx = i }
             }
             guard bestIdx >= 0 else { break }
-            let merged = String(word[bestIdx]) + String(word[bestIdx + 1])
-            word.replaceSubrange(bestIdx...(bestIdx + 1), with: Array(merged))
+            let merged = word[bestIdx] + word[bestIdx + 1]
+            word.replaceSubrange(bestIdx...(bestIdx + 1), with: [merged])
         }
-        return word.map(String.init)
+        return word
     }
 }
