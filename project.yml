@@ -13,14 +13,17 @@ targets:
       - path: PhotoSorter
         excludes:
           - "Resources"
-    resources:
       - path: PhotoSorter/Resources/CLIP_ImageEncoder.mlmodelc
         type: folder
+        buildPhase: resources
       - path: PhotoSorter/Resources/CLIP_TextEncoder.mlmodelc
         type: folder
+        buildPhase: resources
       - path: PhotoSorter/Resources/Tokenizer
         type: folder
+        buildPhase: resources
       - path: PhotoSorter/Resources/labels_default.json
+        buildPhase: resources
     info:
       path: PhotoSorter/Info.plist
       properties:
