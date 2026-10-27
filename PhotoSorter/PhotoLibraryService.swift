@@ -344,6 +344,132 @@ final class PhotoLibraryService: ObservableObject {
         saveCache()
     }
 
+    // MARK: - 最终排序序列（单一归属，无重复；策划案第七节）
+
+    enum SequenceMode: String, CaseIterable {
+        case standard = "三层排序（默认）"
+        case aesthetic = "纯颜值"
+        case similar = "纯相似聚堆"
+    }
+
+    func buildFinalSequence(mode: SequenceMode) -> [(tag: String, id: String)] {
+        var result: [(String, String)] = []
+        var used = Set<String>()
+
+        // 套图区块：套间按套最高分级降序 → 套均颜值降序；套内封面第一 → 颜值降序
+        let activeSets = sets.filter { $0.photoIDs.count >= 2 }.sorted { a, b in
+            if a.levelRaw != b.levelRaw { return a.levelRaw > b.levelRaw }
+            let avgA = a.photoIDs.compactMap { photos[$0]?.scores.aesthetic }.reduce(0, +) / Double(max(a.photoIDs.count, 1))
+            let avgB = b.photoIDs.compactMap { photos[$0]?.scores.aesthetic }.reduce(0, +) / Double(max(b.photoIDs.count, 1))
+            return avgA > avgB
+        }
+        for s in activeSets {
+            var ordered = s.photoIDs.sorted { (photos[$0]?.scores.aesthetic ?? 0) > (photos[$1]?.scores.aesthetic ?? 0) }
+            if let cover = s.coverID, let ci = ordered.firstIndex(of: cover) {
+                ordered.remove(at: ci)
+                ordered.insert(cover, at: 0)
+            }
+            for pid in ordered where !used.contains(pid) {
+                result.append(("\(s.name)·\(s.level.shortLabel)", pid))
+                used.insert(pid)
+            }
+        }
+
+        // 散图区块：不在任何套里的照片
+        let setMembers = Set(sets.flatMap { $0.photoIDs })
+        var scatter = photos.keys.filter { !setMembers.contains($0) && assets[$0] != nil }
+
+        switch mode {
+        case .aesthetic:
+            scatter.sort { (photos[$0]?.scores.aesthetic ?? 0) > (photos[$1]?.scores.aesthetic ?? 0) }
+            for pid in scatter where !used.contains(pid) {
+                result.append(("散图·\(photos[pid]?.level.shortLabel ?? "")", pid))
+                used.insert(pid)
+            }
+
+        case .standard:
+            // 第一层：裸露分级定段落（T3→T2→T1→T0）
+            for lv in stride(from: 3, through: 0, by: -1) {
+                let inPara = scatter.filter { photos[$0]?.level.rawValue == lv }
+                guard !inPara.isEmpty else { continue }
+                // 第二层：风格聚堆（宽松指纹阈值 + 并查集）
+                let clusters = styleClusters(inPara)
+                // 堆间：按堆均颜值降序
+                let orderedClusters = clusters.sorted { ca, cb in
+                    let avgA = ca.reduce(0.0) { $0 + (photos[$1]?.scores.aesthetic ?? 0) } / Double(ca.count)
+                    let avgB = cb.reduce(0.0) { $0 + (photos[$1]?.scores.aesthetic ?? 0) } / Double(cb.count)
+                    return avgA > avgB
+                }
+                for (ci, cluster) in orderedClusters.enumerated() {
+                    // 第三层：堆内颜值降序
+                    let sorted = cluster.sorted { (photos[$0]?.scores.aesthetic ?? 0) > (photos[$1]?.scores.aesthetic ?? 0) }
+                    let tag = clusters.count > 1 ? "T\(lv)·堆\(ci + 1)" : "T\(lv)"
+                    for pid in sorted where !used.contains(pid) {
+                        result.append(("散图·\(tag)", pid))
+                        used.insert(pid)
+                    }
+                }
+            }
+
+        case .similar:
+            // 纯相似：不分段落，全部散图聚堆；堆间按最高分级 → 堆均颜值
+            let clusters = styleClusters(scatter)
+            let orderedClusters = clusters.sorted { ca, cb in
+                let lvA = ca.compactMap { photos[$0]?.level.rawValue }.max() ?? 0
+                let lvB = cb.compactMap { photos[$0]?.level.rawValue }.max() ?? 0
+                if lvA != lvB { return lvA > lvB }
+                let avgA = ca.reduce(0.0) { $0 + (photos[$1]?.scores.aesthetic ?? 0) } / Double(ca.count)
+                let avgB = cb.reduce(0.0) { $0 + (photos[$1]?.scores.aesthetic ?? 0) } / Double(cb.count)
+                return avgA > avgB
+            }
+            for (ci, cluster) in orderedClusters.enumerated() {
+                let sorted = cluster.sorted { (photos[$0]?.scores.aesthetic ?? 0) > (photos[$1]?.scores.aesthetic ?? 0) }
+                for pid in sorted where !used.contains(pid) {
+                    result.append(("堆\(ci + 1)", pid))
+                    used.insert(pid)
+                }
+            }
+        }
+
+        // 兜底：任何漏网照片追加在尾部（保证张数守恒）
+        for pid in photos.keys where !used.contains(pid) && assets[pid] != nil {
+            result.append(("未归类", pid))
+            used.insert(pid)
+        }
+        return result
+    }
+
+    /// 风格堆：比成组更宽松的指纹聚类（软分组，只影响排序，不产生归属）
+    private func styleClusters(_ ids: [String]) -> [[String]] {
+        let t = Float(thresholds.clusterLoose)
+        var parent: [String: String] = [:]
+        for id in ids { parent[id] = id }
+        func find(_ x0: String) -> String {
+            var x = x0
+            while let p = parent[x], p != x {
+                let gp = parent[p] ?? p
+                parent[x] = gp
+                x = gp
+            }
+            return x
+        }
+        func union(_ a: String, _ b: String) {
+            let ra = find(a), rb = find(b)
+            if ra != rb { parent[rb] = ra }
+        }
+        let arr = ids.sorted()
+        for i in 0..<arr.count {
+            guard let f1 = fingerprints[arr[i]] else { continue }
+            for j in (i + 1)..<arr.count {
+                guard let f2 = fingerprints[arr[j]] else { continue }
+                if AestheticAnalyzer.distance(f1, f2) < t { union(arr[i], arr[j]) }
+            }
+        }
+        var buckets: [String: [String]] = [:]
+        for id in arr { buckets[find(id), default: []].append(id) }
+        return buckets.values.sorted { $0.count > $1.count }
+    }
+
     // MARK: - 建相册（引用，不移动照片）
 
     private func findAlbum(named name: String) -> PHAssetCollection? {

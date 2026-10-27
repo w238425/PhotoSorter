@@ -120,6 +120,7 @@ struct Thresholds: Codable {
     var groupStrict: Double = 4.0    // 成组阈值：严格
     var groupMedium: Double = 6.0    // 适中
     var groupLoose: Double = 9.0     // 宽松
+    var clusterLoose: Double = 12.0  // 散图风格堆阈值（比成组更宽松的轻聚类）
 
     static var saveURL: URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
