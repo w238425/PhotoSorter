@@ -1,0 +1,36 @@
+name: PhotoSorter
+options:
+  bundleIdPrefix: com.photosorter
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+
+targets:
+  PhotoSorter:
+    type: application
+    platform: iOS
+    sources:
+      - path: PhotoSorter
+    info:
+      path: PhotoSorter/Info.plist
+      properties:
+        CFBundleDisplayName: 写真分类助手
+        NSPhotoLibraryUsageDescription: 读取相册照片用于本机分类整理，照片不会上传
+        NSPhotoLibraryAddUsageDescription: 创建分类相册
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+    settings:
+      base:
+        SWIFT_VERSION: "5.9"
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGNING_ALLOWED: "NO"
+
+schemes:
+  PhotoSorter:
+    build:
+      targets:
+        PhotoSorter: all
