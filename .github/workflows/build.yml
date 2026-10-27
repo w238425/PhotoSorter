@@ -50,25 +50,33 @@ jobs:
             echo "::error::${line:0:400}"
           done
 
-      - name: Diagnostics as annotations
+      - name: Diag 1 - environment
         if: always()
         run: |
           {
-            echo "===LS==="
-            ls -la
-            echo "===XCODEPROJ==="
-            ls -la PhotoSorter.xcodeproj 2>&1
-            echo "===LIST==="
-            xcodebuild -list -project PhotoSorter.xcodeproj 2>&1
-            echo "===PBXPROJ HEAD==="
-            head -15 PhotoSorter.xcodeproj/project.pbxproj 2>&1
-            echo "===XCODEGEN VERSION==="
-            xcodegen --version 2>&1
-            echo "===YML==="
-            cat project.yml
-          } | head -60 | while IFS= read -r line; do
-            echo "::error::${line:0:380}"
-          done
+            echo "===XCODES==="; ls /Applications | grep -i xcode
+            echo "===SELECTED==="; xcode-select -p; xcodebuild -version
+            echo "===XCODEGEN==="; xcodegen --version
+          } | head -9 | while IFS= read -r line; do echo "::error::${line:0:380}"; done
+
+      - name: Diag 2 - pbxproj file
+        if: always()
+        run: |
+          {
+            echo "===WC==="; wc -c PhotoSorter.xcodeproj/project.pbxproj
+            echo "===LINT==="; plutil -lint PhotoSorter.xcodeproj/project.pbxproj 2>&1
+            echo "===PROJDIR==="; ls -la PhotoSorter.xcodeproj
+          } | head -9 | while IFS= read -r line; do echo "::error::${line:0:380}"; done
+
+      - name: Diag 3 - xcodebuild list
+        if: always()
+        run: |
+          xcodebuild -list -project PhotoSorter.xcodeproj 2>&1 | head -8 | while IFS= read -r line; do echo "::error::${line:0:380}"; done
+
+      - name: Diag 4 - pbxproj head
+        if: always()
+        run: |
+          head -12 PhotoSorter.xcodeproj/project.pbxproj | while IFS= read -r line; do echo "::error::${line:0:380}"; done
 
       - name: Package IPA
         if: success()
