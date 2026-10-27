@@ -20,18 +20,29 @@ jobs:
 
       - name: Build (unsigned)
         run: |
+          set -o pipefail
           xcodebuild \
             -project PhotoSorter.xcodeproj \
             -scheme PhotoSorter \
             -configuration Release \
-            -destination 'generic/platform=iOS' \
             -sdk iphoneos \
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY=""
+            CODE_SIGN_IDENTITY="" \
+            2>&1 | tee build_full.log
+
+      - name: Expose errors as annotations
+        if: failure()
+        run: |
+          echo "===== TAIL OF BUILD LOG ====="
+          tail -60 build_full.log || true
+          grep -nE "error:|xcodebuild: error|\*\* BUILD" build_full.log | head -30 | while read -r line; do
+            echo "::error::${line:0:400}"
+          done
 
       - name: Package IPA
+        if: success()
         run: |
           mkdir -p Payload
           cp -r "build/Build/Products/Release-iphoneos/PhotoSorter.app" Payload/
@@ -39,6 +50,7 @@ jobs:
           ls -lh PhotoSorter-unsigned.ipa
 
       - name: Upload IPA artifact
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: PhotoSorter-ipa
