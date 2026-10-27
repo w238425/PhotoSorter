@@ -11,6 +11,16 @@ targets:
     platform: iOS
     sources:
       - path: PhotoSorter
+        excludes:
+          - "Resources"
+    resources:
+      - path: PhotoSorter/Resources/CLIP_ImageEncoder.mlmodelc
+        type: folder
+      - path: PhotoSorter/Resources/CLIP_TextEncoder.mlmodelc
+        type: folder
+      - path: PhotoSorter/Resources/Tokenizer
+        type: folder
+      - path: PhotoSorter/Resources/labels_default.json
     info:
       path: PhotoSorter/Info.plist
       properties:

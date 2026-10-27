@@ -22,6 +22,35 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
+      - name: Download CLIP CoreML models (~300MB)
+        run: |
+          set -e
+          BASE="https://huggingface.co/InspiratioNULL/CLIP-VIT-B-32-DataComp.XL-CoreML/resolve/main"
+          R="PhotoSorter/Resources"
+          mkdir -p "$R/CLIP_ImageEncoder.mlmodelc/analytics" "$R/CLIP_ImageEncoder.mlmodelc/weights" \
+                   "$R/CLIP_TextEncoder.mlmodelc/analytics" "$R/CLIP_TextEncoder.mlmodelc/weights" \
+                   "$R/Tokenizer"
+          for enc in CLIP_ImageEncoder CLIP_TextEncoder; do
+            for f in analytics/coremldata.bin coremldata.bin metadata.json model.mil weights/weight.bin; do
+              if [ ! -s "$R/$enc.mlmodelc/$f" ]; then
+                echo "downloading $enc/$f"
+                curl -fsSL --retry 3 "$BASE/$enc.mlmodelc/$f" -o "$R/$enc.mlmodelc/$f"
+              fi
+            done
+          done
+          [ -s "$R/Tokenizer/vocab.json" ] || curl -fsSL --retry 3 "$BASE/vocab.json" -o "$R/Tokenizer/vocab.json"
+          [ -s "$R/Tokenizer/merges.txt" ] || curl -fsSL --retry 3 "$BASE/merges.txt" -o "$R/Tokenizer/merges.txt"
+          echo "=== sizes ==="
+          du -sh "$R"/*
+          wc -c "$R/Tokenizer/vocab.json" "$R/CLIP_ImageEncoder.mlmodelc/weights/weight.bin" "$R/CLIP_TextEncoder.mlmodelc/weights/weight.bin"
+          # 防呆：权重小于 50MB 说明下载失败
+          IMG=$(wc -c < "$R/CLIP_ImageEncoder.mlmodelc/weights/weight.bin")
+          TXT=$(wc -c < "$R/CLIP_TextEncoder.mlmodelc/weights/weight.bin")
+          if [ "$IMG" -lt 50000000 ] || [ "$TXT" -lt 50000000 ]; then
+            echo "::error::模型权重下载异常 img=$IMG txt=$TXT"
+            exit 1
+          fi
+
       - name: Generate Xcode project
         run: |
           xcodegen generate

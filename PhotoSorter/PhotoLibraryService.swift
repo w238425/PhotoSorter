@@ -109,14 +109,15 @@ final class PhotoLibraryService: ObservableObject {
 
             for (i, asset) in assets.enumerated() {
                 let id = asset.localIdentifier
-                if let img = analyzer.image(for: asset, maxPixel: 256, allowNetwork: net) {
+                if let img = analyzer.image(for: asset, maxPixel: 512, allowNetwork: net) {
                     let scores = analyzer.analyze(img)
-                    var level = self.classifyLevel(scores)
+                    let tags = TagEngine.shared.classify(img)
+                    var level = self.classifyLevel(scores, tags: tags)
                     if let lv = self.overrides.levelOverride[id] {
                         level = ExposureLevel(rawValue: lv) ?? level
                     }
                     let parts = analyzer.detectBodyParts(img)
-                    analyzed[id] = AnalyzedPhoto(id: id, scores: scores, level: level, parts: parts)
+                    analyzed[id] = AnalyzedPhoto(id: id, scores: scores, level: level, parts: parts, tags: tags)
                     assetMap[id] = asset
                     if let fp = analyzer.featurePrint(img) { fps[id] = fp }
                 }
@@ -172,14 +173,13 @@ final class PhotoLibraryService: ObservableObject {
 
     // MARK: - 分级规则（严格量化）
 
-    func classifyLevel(_ s: PhotoScores) -> ExposureLevel {
+    func classifyLevel(_ s: PhotoScores, tags: [String] = []) -> ExposureLevel {
         let t = thresholds
-        let isPortrait = s.faceCount >= 1 && s.faceCount <= 3
-            && s.faceAreaRatio >= t.minFaceArea
-            && s.sharpness >= t.minSharpness
-        guard isPortrait else { return .normal }
-        if s.skinRatio > t.t2SkinHigh { return .explicit }
-        if s.skinRatio >= t.t2SkinLow { return .revealing }
+        let boost = TagEngine.exposureBoost(tags)
+        // 有人脸 / 明显皮肤 / 暴露类标签 = 写真类
+        guard s.faceCount >= 1 || s.skinRatio >= t.t2SkinLow || boost > 0 else { return .normal }
+        if s.skinRatio > t.t2SkinHigh || boost >= 3 { return .explicit }
+        if s.skinRatio >= t.t2SkinLow || boost >= 1 { return .revealing }
         return .portrait
     }
 
@@ -333,7 +333,7 @@ final class PhotoLibraryService: ObservableObject {
     /// 阈值调整后重新分级（不重新读图，秒级）
     func reclassify() {
         for (id, photo) in photos {
-            var level = classifyLevel(photo.scores)
+            var level = classifyLevel(photo.scores, tags: photo.tags)
             if let lv = overrides.levelOverride[id] {
                 level = ExposureLevel(rawValue: lv) ?? level
             }

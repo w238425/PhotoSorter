@@ -47,14 +47,16 @@ struct AnalyzedPhoto: Identifiable, Codable {
     var parts: [BodyPart]
     var setID: Int?
     var preciseDone: Bool = false    // 是否已完成高清精评
+    var tags: [String] = []          // CLIP 精细标签（胸罩/黑丝/cosplay…）
 
     enum CodingKeys: String, CodingKey {
-        case id, scores, level, parts, setID, preciseDone
+        case id, scores, level, parts, setID, preciseDone, tags
     }
 
-    init(id: String, scores: PhotoScores, level: ExposureLevel, parts: [BodyPart], setID: Int? = nil, preciseDone: Bool = false) {
+    init(id: String, scores: PhotoScores, level: ExposureLevel, parts: [BodyPart], setID: Int? = nil, preciseDone: Bool = false, tags: [String] = []) {
         self.id = id; self.scores = scores; self.level = level
         self.parts = parts; self.setID = setID; self.preciseDone = preciseDone
+        self.tags = tags
     }
 
     init(from decoder: Decoder) throws {
@@ -65,6 +67,7 @@ struct AnalyzedPhoto: Identifiable, Codable {
         parts = try c.decode([BodyPart].self, forKey: .parts)
         setID = try c.decodeIfPresent(Int.self, forKey: .setID)
         preciseDone = try c.decodeIfPresent(Bool.self, forKey: .preciseDone) ?? false
+        tags = try c.decodeIfPresent([String].self, forKey: .tags) ?? []
     }
 }
 

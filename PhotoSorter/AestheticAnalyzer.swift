@@ -144,12 +144,10 @@ final class AestheticAnalyzer {
         return (request.results ?? []).compactMap { $0.boundingBox }
     }
 
-    // MARK: - 部位判定（骨骼关键点规则，见策划案）
+    // MARK: - 部位判定 v2（512px 图 + 降门槛 + 兜底链，保证尽量有归属）
 
     func detectBodyParts(_ image: CGImage) -> [BodyPart] {
-        var parts: [BodyPart] = []
-
-        // 人体关键点
+        // 人体关键点（置信度放宽到 0.15，512px 下可检出）
         var joints: Set<VNHumanBodyPoseObservation.JointName> = []
         let bodyReq = VNDetectHumanBodyPoseRequest()
         let handler = VNImageRequestHandler(cgImage: image, options: [:])
@@ -162,7 +160,7 @@ final class AestheticAnalyzer {
                 .leftAnkle, .rightAnkle
             ]
             for n in names {
-                if let p = try? obs.recognizedPoint(n), p.confidence > 0.3 { joints.insert(n) }
+                if let p = try? obs.recognizedPoint(n), p.confidence > 0.15 { joints.insert(n) }
             }
         }
 
@@ -173,8 +171,8 @@ final class AestheticAnalyzer {
         try? handler.perform([handReq])
         if let handObs = handReq.results, !handObs.isEmpty {
             for o in handObs {
-                let count = (try? o.recognizedPoints(.all))?.values.filter { $0.confidence > 0.3 }.count ?? 0
-                if count >= 3 { hasHand = true }
+                let count = (try? o.recognizedPoints(.all))?.values.filter { $0.confidence > 0.15 }.count ?? 0
+                if count >= 2 { hasHand = true }
             }
         }
 
@@ -184,7 +182,7 @@ final class AestheticAnalyzer {
             faceArea = Double(biggest.width * biggest.height) / Double(image.width * image.height)
         } else { faceArea = 0 }
         let hasFace = !faces.isEmpty
-        let faceBig = faceArea >= 0.25
+        let faceBig = faceArea >= 0.15
 
         let hasShoulders = joints.contains(.leftShoulder) || joints.contains(.rightShoulder)
             || joints.contains(.leftElbow) || joints.contains(.rightElbow)
@@ -193,24 +191,26 @@ final class AestheticAnalyzer {
             || joints.contains(.leftKnee) || joints.contains(.rightKnee)
         let hasAnkles = joints.contains(.leftAnkle) || joints.contains(.rightAnkle)
 
-        if faceBig && !hasShoulders && !hasHips && !hasAnkles {
-            parts.append(.face)
-        }
-        if hasHand && !hasFace {
-            parts.append(.hand)
-        }
-        if hasFace && hasShoulders && !hasHips && !hasAnkles {
-            parts.append(.upper)
-        }
-        if !hasFace && (hasHips || hasAnkles) && !hasShoulders {
-            if hasHips { parts.append(.lower) }
-            if hasAnkles && !hasHips { parts.append(.feet) }
-        }
-        if hasFace && hasAnkles {
-            parts.append(.full)
-        }
-        if parts.isEmpty { parts.append(.undetermined) }
-        return parts
+        // 判定链：从最具体到兜底，保证有归属
+        return finishRules(hasFace: hasFace, faceBig: faceBig,
+                           hasShoulders: hasShoulders, hasHips: hasHips,
+                           hasAnkles: hasAnkles, hasHand: hasHand, image: image)
+    }
+
+    private func finishRules(hasFace: Bool, faceBig: Bool,
+                             hasShoulders: Bool, hasHips: Bool,
+                             hasAnkles: Bool, hasHand: Bool,
+                             image: CGImage) -> [BodyPart] {
+        if hasFace && hasAnkles { return [.full] }
+        if hasFace && hasHips { return [.upper] }
+        if hasFace && hasShoulders { return [.upper] }
+        if hasFace && faceBig { return [.face] }
+        if hasFace { return [.upper] }               // 有脸但骨骼不清 → 上半身兜底
+        if hasHips { return [.lower] }
+        if hasAnkles { return [.feet] }
+        if hasHand { return [.hand] }
+        if Self.skinRatio(of: image) >= 0.20 { return [.upper] }  // 大面积皮肤但无结构 → 上半身兜底
+        return [.undetermined]
     }
 
     // MARK: - 特征指纹（成组用）
