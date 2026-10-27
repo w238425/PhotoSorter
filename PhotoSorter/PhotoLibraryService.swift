@@ -65,7 +65,7 @@ final class PhotoLibraryService: ObservableObject {
         // 用户自建相册
         add(PHAssetCollection.fetchAssetCollections(with: .album, subtype: .albumRegular, options: nil), shared: false)
         // iCloud 共享相册
-        add(PHAssetCollection.fetchAssetCollections(with: .album, subtype: .albumShared, options: nil), shared: true)
+        add(PHAssetCollection.fetchAssetCollections(with: .album, subtype: .albumCloudShared, options: nil), shared: true)
 
         albums = list
         if selectedAlbumIDs.isEmpty {
@@ -210,9 +210,10 @@ final class PhotoLibraryService: ObservableObject {
 
         func find(_ x0: String) -> String {
             var x = x0
-            while parent[x] != x {
-                parent[x] = parent[parent[x]] ?? x   // 路径压缩
-                x = parent[x] ?? x
+            while let p = parent[x], p != x {
+                let gp = parent[p] ?? p   // 路径压缩
+                parent[x] = gp
+                x = gp
             }
             return x
         }
@@ -395,9 +396,9 @@ final class PhotoLibraryService: ObservableObject {
     }
 
     func delete(ids: [String], completion: @escaping (String?) -> Void) {
-        let list = ids.compactMap { assets[$0] } as NSArray
+        let list: [PHAsset] = ids.compactMap { assets[$0] }
         guard !list.isEmpty else { completion("无照片"); return }
-        PHAssetChangeRequest.deleteAssets(list) { ok, err in
+        PHAssetChangeRequest.deleteAssets(list as NSArray, completionHandler: { (ok: Bool, err: Error?) in
             self.ui {
                 if ok {
                     for id in ids {
@@ -407,7 +408,7 @@ final class PhotoLibraryService: ObservableObject {
                 }
                 completion(ok ? nil : (err?.localizedDescription ?? "删除失败"))
             }
-        }
+        })
     }
 
     // MARK: - 缓存
@@ -467,7 +468,7 @@ final class PhotoLibraryService: ObservableObject {
     }
 
     func clearAllData() {
-        photos = [:]; assets = [:]; sets = [:]; fingerprints = [:]
+        photos = [:]; assets = [:]; sets = []; fingerprints = [:]
         videoItems = [:]; videoAssets = [:]
         overrides = Overrides(); overrides.save()
         hasData = false

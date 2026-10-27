@@ -227,10 +227,10 @@ final class AestheticAnalyzer {
         return nil
     }
 
-    /// 指纹距离：0 完全相同，越小越相似
+    /// 指纹距离：0 完全相同，越小越相似（指纹以 Data 持久化，用时反序列化）
     static func distance(_ a: Data, _ b: Data) -> Float {
-        guard let oa = try? VNFeaturePrintObservation(data: a),
-              let ob = try? VNFeaturePrintObservation(data: b) else { return .greatestFiniteMagnitude }
+        guard let oa = (try? NSKeyedUnarchiver.unarchivedObject(ofClass: VNFeaturePrintObservation.self, from: a)) as? VNFeaturePrintObservation,
+              let ob = (try? NSKeyedUnarchiver.unarchivedObject(ofClass: VNFeaturePrintObservation.self, from: b)) as? VNFeaturePrintObservation else { return .greatestFiniteMagnitude }
         var d: Float = 0
         do { try oa.computeDistance(&d, to: ob) } catch { return .greatestFiniteMagnitude }
         return d
@@ -286,7 +286,7 @@ final class AestheticAnalyzer {
     static func meanAbsDiff(_ a: [UInt8], _ b: [UInt8]) -> Double {
         guard a.count == b.count, !a.isEmpty else { return 0 }
         var sum = 0.0
-        for i in 0..<a.count { sum += abs(Int(a[i]) - Int(b[i])) }
+        for i in 0..<a.count { sum += Double(abs(Int(a[i]) - Int(b[i]))) }
         return sum / Double(a.count)
     }
 }
