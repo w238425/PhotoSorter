@@ -121,7 +121,9 @@ final class PhotoLibraryService: ObservableObject {
                 let id = asset.localIdentifier
                 if let img = analyzer.image(for: asset, maxPixel: 512, allowNetwork: net) {
                     let scores = analyzer.analyze(img)
-                    let tags = TagEngine.shared.classify(img)
+                    // 一次图像编码同时拿到主标签、写真概率和精细标签
+                    let main = TagEngine.shared.classifyMain(img)
+                    let tags = main?.tags ?? []
                     var level = self.classifyLevel(scores, tags: tags)
                     if let lv = self.overrides.levelOverride[id] {
                         level = ExposureLevel(rawValue: lv) ?? level

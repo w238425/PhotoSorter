@@ -1,5 +1,6 @@
 import SwiftUI
 import Photos
+import UIKit
 
 // MARK: - 共用网格
 

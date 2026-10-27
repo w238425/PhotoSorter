@@ -208,6 +208,8 @@ final class TagEngine {
         var conf: Double
         var probs: [String: Double]
         var portrait: Double
+        /// 顺带返回的精细标签（复用同一次图像编码，避免每张图跑两次 CLIP）
+        var tags: [String] = []
     }
 
     private var ladderEmbeddings: [String: [Float]] = [:]
@@ -267,8 +269,21 @@ final class TagEngine {
         let pProbs = softmax([pos * 100.0, neg * 100.0])
 
         let tag = bestP >= Self.minConfidence ? bestName : "其他"
+
+        // 同一份图像向量顺带算出精细标签，省掉第二次图像编码
+        var scored: [(String, Float)] = []
+        for def in allLabels where embeddings[def.cn] != nil {
+            scored.append((def.cn, dot(v, embeddings[def.cn]!)))
+        }
+        scored.sort { $0.1 > $1.1 }
+        var tags: [String] = []
+        if let top = scored.first {
+            let cutoff = max(top.1 - 0.08, 0.16)
+            tags = scored.filter { $0.1 >= cutoff }.prefix(4).map { $0.0 }
+        }
+
         return MainTagResult(tag: tag, conf: max(bestP, 0), probs: probs,
-                             portrait: pProbs.first ?? 0)
+                             portrait: pProbs.first ?? 0, tags: tags)
     }
 
     private func softmax(_ x: [Double]) -> [Double] {
