@@ -94,6 +94,21 @@ jobs:
           zip -qry PhotoSorter-unsigned.ipa Payload
           ls -lh PhotoSorter-unsigned.ipa
 
+      - name: Diagnose missing resources
+        if: always()
+        run: |
+          {
+            echo "=== Resources dir ==="
+            du -sh PhotoSorter/Resources/* 2>&1
+            echo "=== App bundle mlmodelc/json ==="
+            find build/Build/Products -maxdepth 3 \( -name "*.mlmodelc" -o -name "vocab.json" -o -name "labels_default.json" \) 2>&1
+            echo "=== App bundle total ==="
+            du -sh build/Build/Products/Release-iphoneos/PhotoSorter.app 2>&1
+            echo "=== pbxproj references ==="
+            grep -c "mlmodelc" PhotoSorter.xcodeproj/project.pbxproj 2>&1
+            grep -m3 "mlmodelc" PhotoSorter.xcodeproj/project.pbxproj 2>&1
+          } | head -25 | while IFS= read -r line; do echo "::error::${line:0:380}"; done
+
       - name: Upload IPA artifact
         if: success()
         uses: actions/upload-artifact@v4
