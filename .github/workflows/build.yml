@@ -50,6 +50,26 @@ jobs:
             echo "::error::${line:0:400}"
           done
 
+      - name: Diagnostics as annotations
+        if: always()
+        run: |
+          {
+            echo "===LS==="
+            ls -la
+            echo "===XCODEPROJ==="
+            ls -la PhotoSorter.xcodeproj 2>&1
+            echo "===LIST==="
+            xcodebuild -list -project PhotoSorter.xcodeproj 2>&1
+            echo "===PBXPROJ HEAD==="
+            head -15 PhotoSorter.xcodeproj/project.pbxproj 2>&1
+            echo "===XCODEGEN VERSION==="
+            xcodegen --version 2>&1
+            echo "===YML==="
+            cat project.yml
+          } | head -60 | while IFS= read -r line; do
+            echo "::error::${line:0:380}"
+          done
+
       - name: Package IPA
         if: success()
         run: |
