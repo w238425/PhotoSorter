@@ -121,7 +121,10 @@ jobs:
           path: PhotoSorter-unsigned.ipa
 
   # 人体解析模型转换：best effort，失败不阻塞出包
+  # 暂时停用：它会额外占用一台 macOS 编译机，当前 macOS runner 排队紧张，
+  # 停用它可让 build 独占队列。等出包恢复后再打开。
   convert-parsing:
+    if: false
     runs-on: macos-15
     continue-on-error: true
     steps:
