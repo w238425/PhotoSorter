@@ -79,8 +79,8 @@ final class CLIPTokenizer {
                 if let r = mergeRanks[pair], r < bestRank { bestRank = r; bestIdx = i }
             }
             guard bestIdx >= 0 else { break }
-            let merged = word[bestIdx] + word[bestIdx + 1]
-            word.replaceSubrange(bestIdx...(bestIdx + 1), with: [merged])
+            let merged = String(word[bestIdx]) + String(word[bestIdx + 1])
+            word.replaceSubrange(bestIdx...(bestIdx + 1), with: Array(merged))
         }
         return word.map(String.init)
     }

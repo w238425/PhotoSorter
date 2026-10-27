@@ -125,7 +125,7 @@ final class TagEngine {
         let ids = tokenizer.encode(text)
         guard let arr = try? MLMultiArray(shape: [1, 77], dataType: .int32) else { return nil }
         for (i, v) in ids.enumerated() { arr[i] = NSNumber(value: v) }
-        let provider = MLDictionaryFeatureProvider(dictionary: ["text": MLFeatureValue(multiArray: arr)])
+        guard let provider = try? MLDictionaryFeatureProvider(dictionary: ["text": MLFeatureValue(multiArray: arr)]) else { return nil }
         guard let out = try? textModel.prediction(from: provider),
               let emb = out.featureValue(for: "var_1317")?.multiArrayValue else { return nil }
         var v = [Float](repeating: 0, count: 512)
