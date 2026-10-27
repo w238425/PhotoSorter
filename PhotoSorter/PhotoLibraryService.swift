@@ -132,7 +132,7 @@ final class PhotoLibraryService: ObservableObject {
                     var photo = AnalyzedPhoto(id: id, scores: scores, level: level,
                                               parts: parts, tags: tags)
                     // 第二层：服装主标签（唯一归属 + softmax 置信度）
-                    if let main = TagEngine.shared.classifyMain(img) {
+                    if let main = main {
                         photo.mainTag = main.tag
                         photo.tagConf = main.conf
                         // 第一层：写真判定——CLIP 写真概率 + 分级共同决定
