@@ -398,7 +398,9 @@ final class PhotoLibraryService: ObservableObject {
     func delete(ids: [String], completion: @escaping (String?) -> Void) {
         let list: [PHAsset] = ids.compactMap { assets[$0] }
         guard !list.isEmpty else { completion("无照片"); return }
-        PHAssetChangeRequest.deleteAssets(list as NSArray, completionHandler: { (ok: Bool, err: Error?) in
+        PHPhotoLibrary.shared().performChanges({
+            PHAssetChangeRequest.deleteAssets(list as NSArray)
+        }, completionHandler: { (ok: Bool, err: Error?) in
             self.ui {
                 if ok {
                     for id in ids {
