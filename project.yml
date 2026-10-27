@@ -24,7 +24,7 @@ targets:
           - UIInterfaceOrientationPortrait
     settings:
       base:
-        SWIFT_VERSION: "5.9"
+        SWIFT_VERSION: "5.0"
         TARGETED_DEVICE_FAMILY: "1"
         CODE_SIGN_STYLE: Automatic
         CODE_SIGNING_ALLOWED: "NO"

@@ -12,6 +12,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Select latest Xcode 16
+        run: |
+          XC16=$(ls -d /Applications/Xcode_16*.app 2>/dev/null | sort -V | tail -1)
+          echo "using $XC16"
+          sudo xcode-select -s "$XC16"
+          xcodebuild -version
+
       - name: Install XcodeGen
         run: brew install xcodegen
 
@@ -49,34 +56,6 @@ jobs:
           grep -nE "error:|xcodebuild: error|\*\* BUILD" build_full.log | head -30 | while read -r line; do
             echo "::error::${line:0:400}"
           done
-
-      - name: Diag 1 - environment
-        if: always()
-        run: |
-          {
-            echo "===XCODES==="; ls /Applications | grep -i xcode
-            echo "===SELECTED==="; xcode-select -p; xcodebuild -version
-            echo "===XCODEGEN==="; xcodegen --version
-          } | head -9 | while IFS= read -r line; do echo "::error::${line:0:380}"; done
-
-      - name: Diag 2 - pbxproj file
-        if: always()
-        run: |
-          {
-            echo "===WC==="; wc -c PhotoSorter.xcodeproj/project.pbxproj
-            echo "===LINT==="; plutil -lint PhotoSorter.xcodeproj/project.pbxproj 2>&1
-            echo "===PROJDIR==="; ls -la PhotoSorter.xcodeproj
-          } | head -9 | while IFS= read -r line; do echo "::error::${line:0:380}"; done
-
-      - name: Diag 3 - xcodebuild list
-        if: always()
-        run: |
-          xcodebuild -list -project PhotoSorter.xcodeproj 2>&1 | head -8 | while IFS= read -r line; do echo "::error::${line:0:380}"; done
-
-      - name: Diag 4 - pbxproj head
-        if: always()
-        run: |
-          head -12 PhotoSorter.xcodeproj/project.pbxproj | while IFS= read -r line; do echo "::error::${line:0:380}"; done
 
       - name: Package IPA
         if: success()
