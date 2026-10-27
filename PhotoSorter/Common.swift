@@ -7,6 +7,8 @@ import UIKit
 struct ThumbView: View {
     let asset: PHAsset
     var side: CGFloat = 110
+    /// 给定时横向撑满、高度固定（相册卡片用）
+    var fillHeight: CGFloat? = nil
 
     @State private var image: UIImage?
 
@@ -22,7 +24,8 @@ struct ThumbView: View {
                     .foregroundColor(.secondary)
             }
         }
-        .frame(width: side, height: side)
+        .frame(width: fillHeight == nil ? side : nil, height: fillHeight ?? side)
+        .frame(maxWidth: fillHeight == nil ? nil : .infinity)
         .clipped()
         .onAppear(perform: load)
     }

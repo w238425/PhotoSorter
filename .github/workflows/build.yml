@@ -115,3 +115,31 @@ jobs:
         with:
           name: PhotoSorter-ipa
           path: PhotoSorter-unsigned.ipa
+
+  # 人体解析模型转换：best effort，失败不阻塞出包
+  convert-parsing:
+    runs-on: macos-14
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install converters
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install coremltools onnx
+
+      - name: Convert SegFormer-B2 human parsing to CoreML
+        run: python tools/convert_parsing.py HumanParsing.mlpackage
+
+      - name: Upload parsing model
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HumanParsing-mlpackage
+          path: HumanParsing.mlpackage

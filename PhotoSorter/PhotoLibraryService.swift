@@ -6,6 +6,7 @@ struct AlbumInfo: Identifiable, Hashable {
     let title: String
     let count: Int
     let isShared: Bool
+    let isUserAlbum: Bool     // 用户自建相册（默认隐藏，避免混入醒图/微信/美颜相机等）
 }
 
 /// 照片库总服务：授权、相册选择、扫描分析、成组、分级、缓存、建相册、查重删除
@@ -48,29 +49,38 @@ final class PhotoLibraryService: ObservableObject {
         }
     }
 
+    /// 默认只显示「本地」与 iCloud 共享相册；第三方 App 建的相册混在用户自建相册里，
+    /// 无公开 API 可区分，因此默认隐藏，需要时再打开开关。
+    @Published var showUserAlbums = false
+
     func loadAlbums() {
         var list: [AlbumInfo] = []
-        func add(_ fetch: PHFetchResult<PHAssetCollection>, shared: Bool) {
+        func add(_ fetch: PHFetchResult<PHAssetCollection>, shared: Bool, user: Bool) {
             fetch.enumerateObjects { col, _, _ in
                 let count = PHAsset.fetchAssets(in: col, options: nil).count
                 if count > 0 {
                     list.append(AlbumInfo(id: col.localIdentifier,
                                           title: col.localizedTitle ?? "未命名",
-                                          count: count, isShared: shared))
+                                          count: count, isShared: shared,
+                                          isUserAlbum: user))
                 }
             }
         }
-        // 相机胶卷
-        add(PHAssetCollection.fetchAssetCollections(with: .smartAlbum, subtype: .smartAlbumUserLibrary, options: nil), shared: false)
-        // 用户自建相册
-        add(PHAssetCollection.fetchAssetCollections(with: .album, subtype: .albumRegular, options: nil), shared: false)
+        // 本机图库（改名「本地」）
+        add(PHAssetCollection.fetchAssetCollections(with: .smartAlbum, subtype: .smartAlbumUserLibrary, options: nil), shared: false, user: false)
+        // 用户自建 / 第三方相册
+        add(PHAssetCollection.fetchAssetCollections(with: .album, subtype: .albumRegular, options: nil), shared: false, user: true)
         // iCloud 共享相册
-        add(PHAssetCollection.fetchAssetCollections(with: .album, subtype: .albumCloudShared, options: nil), shared: true)
+        add(PHAssetCollection.fetchAssetCollections(with: .album, subtype: .albumCloudShared, options: nil), shared: true, user: false)
 
         albums = list
         if selectedAlbumIDs.isEmpty {
-            selectedAlbumIDs = Set(list.filter { !$0.isShared }.prefix(1).map { $0.id })
+            selectedAlbumIDs = Set(list.filter { $0.isShared }.prefix(1).map { $0.id })
         }
+    }
+
+    var visibleAlbums: [AlbumInfo] {
+        albums.filter { showUserAlbums || !$0.isUserAlbum }
     }
 
     private func collectionsForSelected() -> [PHAssetCollection] {
@@ -117,7 +127,25 @@ final class PhotoLibraryService: ObservableObject {
                         level = ExposureLevel(rawValue: lv) ?? level
                     }
                     let parts = analyzer.detectBodyParts(img)
-                    analyzed[id] = AnalyzedPhoto(id: id, scores: scores, level: level, parts: parts, tags: tags)
+                    var photo = AnalyzedPhoto(id: id, scores: scores, level: level,
+                                              parts: parts, tags: tags)
+                    // 第二层：服装主标签（唯一归属 + softmax 置信度）
+                    if let main = TagEngine.shared.classifyMain(img) {
+                        photo.mainTag = main.tag
+                        photo.tagConf = main.conf
+                        // 第一层：写真判定——CLIP 写真概率 + 分级共同决定
+                        photo.isPortrait = main.portrait > 0.30 && level.rawValue >= ExposureLevel.portrait.rawValue
+                        // 第三层用的裸露度：肤色为主，CLIP 裸露概率修正（无人体解析时的回退）
+                        let nudity = (main.probs["无胸罩"] ?? 0) + (main.probs["开裆"] ?? 0) +
+                                     (main.probs["全裸"] ?? 0) + 0.5 * (main.probs["比基尼"] ?? 0)
+                        photo.exposure = min(100, 100 * (0.68 * min(1, scores.skinRatio / 0.55) +
+                                                         0.32 * min(1, nudity * 2.0)))
+                    } else {
+                        photo.mainTag = ClothingLadder.other.rawValue
+                        photo.isPortrait = level.rawValue >= ExposureLevel.portrait.rawValue
+                        photo.exposure = min(100, 100 * min(1, scores.skinRatio / 0.55))
+                    }
+                    analyzed[id] = photo
                     assetMap[id] = asset
                     if let fp = analyzer.featurePrint(img) { fps[id] = fp }
                 }
@@ -361,88 +389,152 @@ final class PhotoLibraryService: ObservableObject {
     func buildFinalSequence(mode: SequenceMode) -> [(tag: String, id: String)] {
         var result: [(String, String)] = []
         var used = Set<String>()
+        let all = photos.keys.filter { assets[$0] != nil }
 
-        // 套图区块：套间按套最高分级降序 → 套均颜值降序；套内封面第一 → 颜值降序
-        let activeSets = sets.filter { $0.photoIDs.count >= 2 }.sorted { a, b in
-            if a.levelRaw != b.levelRaw { return a.levelRaw > b.levelRaw }
-            let avgA = a.photoIDs.compactMap { photos[$0]?.scores.aesthetic }.reduce(0, +) / Double(max(a.photoIDs.count, 1))
-            let avgB = b.photoIDs.compactMap { photos[$0]?.scores.aesthetic }.reduce(0, +) / Double(max(b.photoIDs.count, 1))
-            return avgA > avgB
+        func avgExposure(_ ids: [String]) -> Double {
+            guard !ids.isEmpty else { return 0 }
+            return ids.reduce(0.0) { $0 + (photos[$1]?.exposure ?? 0) } / Double(ids.count)
         }
-        for s in activeSets {
-            var ordered = s.photoIDs.sorted { (photos[$0]?.scores.aesthetic ?? 0) > (photos[$1]?.scores.aesthetic ?? 0) }
-            if let cover = s.coverID, let ci = ordered.firstIndex(of: cover) {
+
+        if mode == .aesthetic {
+            for pid in all.sorted(by: { (photos[$0]?.scores.aesthetic ?? 0) > (photos[$1]?.scores.aesthetic ?? 0) }) {
+                result.append(("按颜值", pid)); used.insert(pid)
+            }
+            return result
+        }
+
+        if mode == .similar {
+            for (ci, c) in styleClusters(all).enumerated() {
+                for pid in c.sorted(by: { (photos[$0]?.scores.aesthetic ?? 0) > (photos[$1]?.scores.aesthetic ?? 0) })
+                where !used.contains(pid) {
+                    result.append(("堆\(ci + 1)", pid)); used.insert(pid)
+                }
+            }
+            for pid in all where !used.contains(pid) { result.append(("未归类", pid)); used.insert(pid) }
+            return result
+        }
+
+        // ===== 三层排序 =====
+        // 第一层：写真区块（排完即锁定，后面两层不碰）
+        let portraits = all.filter { photos[$0]?.isPortrait == true }
+        var setBuckets: [Int: [String]] = [:]
+        var portraitSingles: [String] = []
+        for pid in portraits {
+            if let sid = photos[pid]?.setID,
+               (sets.first(where: { $0.id == sid })?.photoIDs.count ?? 0) >= 2 {
+                setBuckets[sid, default: []].append(pid)
+            } else {
+                portraitSingles.append(pid)
+            }
+        }
+        // 套间按套平均裸露度升序（保守在前）；套内封面=质量最高，其余按质量降序
+        for sid in setBuckets.keys.sorted(by: { avgExposure(setBuckets[$0] ?? []) < avgExposure(setBuckets[$1] ?? []) }) {
+            guard let members = setBuckets[sid] else { continue }
+            var ordered = members.sorted { (photos[$0]?.scores.aesthetic ?? 0) > (photos[$1]?.scores.aesthetic ?? 0) }
+            if let cover = sets.first(where: { $0.id == sid })?.coverID,
+               let ci = ordered.firstIndex(of: cover) {
                 ordered.remove(at: ci)
                 ordered.insert(cover, at: 0)
             }
             for pid in ordered where !used.contains(pid) {
-                result.append(("\(s.name)·\(s.level.shortLabel)", pid))
-                used.insert(pid)
+                result.append(("写真·套\(sid)", pid)); used.insert(pid)
             }
         }
+        // 不成套的散写真 → 写真页里的「其他」组
+        for pid in portraitSingles.sorted(by: { (photos[$0]?.exposure ?? 0) < (photos[$1]?.exposure ?? 0) })
+        where !used.contains(pid) {
+            result.append(("写真·其他", pid)); used.insert(pid)
+        }
 
-        // 散图区块：不在任何套里的照片
-        let setMembers = Set(sets.flatMap { $0.photoIDs })
-        var scatter = photos.keys.filter { !setMembers.contains($0) && assets[$0] != nil }
-
-        switch mode {
-        case .aesthetic:
-            scatter.sort { (photos[$0]?.scores.aesthetic ?? 0) > (photos[$1]?.scores.aesthetic ?? 0) }
-            for pid in scatter where !used.contains(pid) {
-                result.append(("散图·\(photos[pid]?.level.shortLabel ?? "")", pid))
-                used.insert(pid)
-            }
-
-        case .standard:
-            // 第一层：裸露分级定段落（T3→T2→T1→T0）
-            for lv in stride(from: 3, through: 0, by: -1) {
-                let inPara = scatter.filter { photos[$0]?.level.rawValue == lv }
-                guard !inPara.isEmpty else { continue }
-                // 第二层：风格聚堆（宽松指纹阈值 + 并查集）
-                let clusters = styleClusters(inPara)
-                // 堆间：按堆均颜值降序
-                let orderedClusters = clusters.sorted { ca, cb in
-                    let avgA = ca.reduce(0.0) { $0 + (photos[$1]?.scores.aesthetic ?? 0) } / Double(ca.count)
-                    let avgB = cb.reduce(0.0) { $0 + (photos[$1]?.scores.aesthetic ?? 0) } / Double(cb.count)
-                    return avgA > avgB
-                }
-                for (ci, cluster) in orderedClusters.enumerated() {
-                    // 第三层：堆内颜值降序
-                    let sorted = cluster.sorted { (photos[$0]?.scores.aesthetic ?? 0) > (photos[$1]?.scores.aesthetic ?? 0) }
-                    let tag = clusters.count > 1 ? "T\(lv)·堆\(ci + 1)" : "T\(lv)"
-                    for pid in sorted where !used.contains(pid) {
-                        result.append(("散图·\(tag)", pid))
-                        used.insert(pid)
+        // 第二层：服装主标签，组间按暴露阶梯升序；第三层：组内 部位聚堆 → 相似聚簇 → 裸露度升序
+        var buckets: [String: [String]] = [:]
+        for pid in all where photos[pid]?.isPortrait != true {
+            let tag = photos[pid]?.mainTag ?? ClothingLadder.other.rawValue
+            buckets[tag, default: []].append(pid)
+        }
+        for name in ClothingLadder.orderedNames {
+            guard let ids = buckets[name], !ids.isEmpty else { continue }
+            let byPart = Dictionary(grouping: ids) { photos[$0]?.part.sortIndex ?? 6 }
+            for key in byPart.keys.sorted() {
+                guard let sub = byPart[key] else { continue }
+                let clusters = styleClusters(sub).sorted { avgExposure($0) < avgExposure($1) }
+                for c in clusters {
+                    for pid in c.sorted(by: { (photos[$0]?.exposure ?? 0) < (photos[$1]?.exposure ?? 0) })
+                    where !used.contains(pid) {
+                        result.append((name, pid)); used.insert(pid)
                     }
                 }
             }
-
-        case .similar:
-            // 纯相似：不分段落，全部散图聚堆；堆间按最高分级 → 堆均颜值
-            let clusters = styleClusters(scatter)
-            let orderedClusters = clusters.sorted { ca, cb in
-                let lvA = ca.compactMap { photos[$0]?.level.rawValue }.max() ?? 0
-                let lvB = cb.compactMap { photos[$0]?.level.rawValue }.max() ?? 0
-                if lvA != lvB { return lvA > lvB }
-                let avgA = ca.reduce(0.0) { $0 + (photos[$1]?.scores.aesthetic ?? 0) } / Double(ca.count)
-                let avgB = cb.reduce(0.0) { $0 + (photos[$1]?.scores.aesthetic ?? 0) } / Double(cb.count)
-                return avgA > avgB
-            }
-            for (ci, cluster) in orderedClusters.enumerated() {
-                let sorted = cluster.sorted { (photos[$0]?.scores.aesthetic ?? 0) > (photos[$1]?.scores.aesthetic ?? 0) }
-                for pid in sorted where !used.contains(pid) {
-                    result.append(("堆\(ci + 1)", pid))
-                    used.insert(pid)
-                }
-            }
         }
 
-        // 兜底：任何漏网照片追加在尾部（保证张数守恒）
-        for pid in photos.keys where !used.contains(pid) && assets[pid] != nil {
-            result.append(("未归类", pid))
-            used.insert(pid)
+        // 兜底：保证张数守恒
+        for pid in all where !used.contains(pid) {
+            result.append(("未归类", pid)); used.insert(pid)
         }
         return result
+    }
+
+    // MARK: - 浏览用的分组视图（写真套图 / 服装标签 / 部位）
+
+    // MARK: - 隐藏（共享相册只读，删不掉，只能在 App 内隐藏）
+
+    func setHidden(_ id: String, _ on: Bool) {
+        overrides.hidden[id] = on
+        overrides.save()
+        objectWillChange.send()
+    }
+
+    func isHidden(_ id: String) -> Bool { overrides.hidden[id] == true }
+
+    private func visible() -> [String] {
+        photos.keys.filter { assets[$0] != nil && overrides.hidden[$0] != true }
+    }
+
+    /// 写真页：成套写真 + 散写真（其他）
+    func portraitGroups() -> [(title: String, ids: [String])] {
+        let all = visible().filter { photos[$0]?.isPortrait == true }
+        var groups: [(String, [String])] = []
+        var inSet = Set<String>()
+        for s in sets where s.photoIDs.count >= 2 {
+            let members = s.photoIDs.filter { all.contains($0) }
+            guard !members.isEmpty else { continue }
+            var ordered = members.sorted { (photos[$0]?.scores.aesthetic ?? 0) > (photos[$1]?.scores.aesthetic ?? 0) }
+            if let cover = s.coverID, let ci = ordered.firstIndex(of: cover) {
+                ordered.remove(at: ci); ordered.insert(cover, at: 0)
+            }
+            groups.append(("写真套图 \(s.id)", ordered))
+            inSet.formUnion(members)
+        }
+        let singles = all.filter { !inSet.contains($0) }
+            .sorted { (photos[$0]?.exposure ?? 0) < (photos[$1]?.exposure ?? 0) }
+        if !singles.isEmpty { groups.append(("其他（散写真）", singles)) }
+        return groups
+    }
+
+    /// 标签页：互斥主标签 + 张数，类别之间零重叠
+    func tagGroups() -> [(title: String, ids: [String])] {
+        let all = visible().filter { photos[$0]?.isPortrait != true }
+        var buckets: [String: [String]] = [:]
+        for pid in all { buckets[photos[pid]?.mainTag ?? ClothingLadder.other.rawValue, default: []].append(pid) }
+        var out: [(String, [String])] = []
+        for name in ClothingLadder.orderedNames {
+            guard let ids = buckets[name], !ids.isEmpty else { continue }
+            let byPart = Dictionary(grouping: ids) { photos[$0]?.part.sortIndex ?? 6 }
+            var flat: [String] = []
+            for key in byPart.keys.sorted() { flat.append(contentsOf: byPart[key] ?? []) }
+            out.append((name, flat))
+        }
+        return out
+    }
+
+    /// 部位页：浏览入口，不参与序列排序
+    func partGroups() -> [(title: String, ids: [String])] {
+        let all = visible()
+        var buckets: [String: [String]] = [:]
+        for pid in all { buckets[photos[pid]?.part.rawValue ?? "未判定", default: []].append(pid) }
+        return BodyPart.allCases
+            .filter { !(buckets[$0.rawValue] ?? []).isEmpty }
+            .map { ($0.rawValue, buckets[$0.rawValue]!) }
     }
 
     /// 风格堆：比成组更宽松的指纹聚类（软分组，只影响排序，不产生归属）

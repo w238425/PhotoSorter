@@ -21,11 +21,71 @@ enum BodyPart: String, CaseIterable, Codable, Identifiable {
     case hand = "手"
     case upper = "上半身"
     case lower = "下半身"
-    case feet = "脚部"
+    case feet = "脚"
     case full = "全身"
     case undetermined = "未判定"
 
     var id: String { rawValue }
+
+    /// 兼容旧缓存：上一版用过「脚部」，直接解码会整批失败
+    init(from decoder: Decoder) throws {
+        let v = try decoder.singleValueContainer().decode(String.self)
+        if v == "脚部" { self = .feet } else { self = Self(rawValue: v) ?? .undetermined }
+    }
+    /// 组内二次切分的固定顺序（手和手、脚和脚相邻）
+    var sortIndex: Int {
+        switch self {
+        case .full: return 0
+        case .upper: return 1
+        case .lower: return 2
+        case .feet: return 3
+        case .hand: return 4
+        case .face: return 5
+        case .undetermined: return 6
+        }
+    }
+}
+
+// MARK: - 服装主标签（第二层，唯一归属，按暴露度升序即组间顺序）
+
+enum ClothingLadder: String, CaseIterable, Codable {
+    case trousers  = "长裤长裙"
+    case shorts    = "短裙短裤"
+    case uniform   = "制服"
+    case cosplay   = "Cosplay"
+    case bra       = "胸罩内裤"
+    case bikini    = "比基尼"
+    case topless   = "无胸罩"
+    case stockings = "黑丝"
+    case bath      = "浴室"
+    case crotchless = "开裆"
+    case nude      = "全裸"
+    case other     = "其他"
+
+    static var orderedNames: [String] { allCases.map { $0.rawValue } }
+
+    /// 每张照片只归一个主标签：越具体越优先（值越大越优先）
+    static func priority(_ name: String) -> Int {
+        switch name {
+        case crotchless.rawValue: return 100
+        case nude.rawValue: return 95
+        case stockings.rawValue: return 90
+        case bath.rawValue: return 85
+        case topless.rawValue: return 80
+        case bikini.rawValue: return 70
+        case bra.rawValue: return 60
+        case cosplay.rawValue: return 50
+        case uniform.rawValue: return 40
+        case shorts.rawValue: return 30
+        case trousers.rawValue: return 20
+        default: return 0
+        }
+    }
+
+    /// 组间顺序：暴露阶梯升序（保守在前）
+    static func index(_ name: String) -> Int {
+        orderedNames.firstIndex(of: name) ?? (orderedNames.count - 1)
+    }
 }
 
 // MARK: - 照片分析结果
@@ -48,9 +108,20 @@ struct AnalyzedPhoto: Identifiable, Codable {
     var setID: Int?
     var preciseDone: Bool = false    // 是否已完成高清精评
     var tags: [String] = []          // CLIP 精细标签（胸罩/黑丝/cosplay…）
+    /// 第二层唯一归属的服装主标签（可空 = 未定，归"其他"）
+    var mainTag: String = ClothingLadder.other.rawValue
+    /// 主标签 softmax 置信度 0~1
+    var tagConf: Double = 0
+    /// 0~100 裸露度（像素解析为主，CLIP 为修正）
+    var exposure: Double = 0
+    /// 是否写真（第一层锁定区块）
+    var isPortrait: Bool = false
+
+    var part: BodyPart { parts.first ?? .undetermined }
 
     enum CodingKeys: String, CodingKey {
         case id, scores, level, parts, setID, preciseDone, tags
+        case mainTag, tagConf, exposure, isPortrait
     }
 
     init(id: String, scores: PhotoScores, level: ExposureLevel, parts: [BodyPart], setID: Int? = nil, preciseDone: Bool = false, tags: [String] = []) {
@@ -68,6 +139,10 @@ struct AnalyzedPhoto: Identifiable, Codable {
         setID = try c.decodeIfPresent(Int.self, forKey: .setID)
         preciseDone = try c.decodeIfPresent(Bool.self, forKey: .preciseDone) ?? false
         tags = try c.decodeIfPresent([String].self, forKey: .tags) ?? []
+        mainTag = try c.decodeIfPresent(String.self, forKey: .mainTag) ?? ClothingLadder.other.rawValue
+        tagConf = try c.decodeIfPresent(Double.self, forKey: .tagConf) ?? 0
+        exposure = try c.decodeIfPresent(Double.self, forKey: .exposure) ?? 0
+        isPortrait = try c.decodeIfPresent(Bool.self, forKey: .isPortrait) ?? false
     }
 }
 
@@ -142,6 +217,7 @@ struct Overrides: Codable {
     var levelOverride: [String: Int] = [:]   // 照片ID -> 强制分级
     var setMove: [String: Int] = [:]         // 照片ID -> 强制移入的套ID
     var setRemove: [String: Bool] = [:]      // 照片ID -> 强制移出所属套
+    var hidden: [String: Bool] = [:]         // 照片ID -> App 内隐藏（共享相册无法真删）
 
     static var saveURL: URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
