@@ -16,7 +16,16 @@ jobs:
         run: brew install xcodegen
 
       - name: Generate Xcode project
-        run: xcodegen generate
+        run: |
+          xcodegen generate
+          echo "===== ls root ====="
+          ls -la
+          echo "===== ls xcodeproj ====="
+          ls -la PhotoSorter.xcodeproj || echo "NO XCODEPROJ"
+          echo "===== xcodebuild -list ====="
+          xcodebuild -list -project PhotoSorter.xcodeproj || echo "LIST FAILED"
+          echo "===== pbxproj head ====="
+          head -20 PhotoSorter.xcodeproj/project.pbxproj || echo "NO PBXPROJ"
 
       - name: Build (unsigned)
         run: |
