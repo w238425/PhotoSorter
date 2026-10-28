@@ -145,10 +145,13 @@ final class PhotoLibraryService: ObservableObject {
                         // 第一层：写真判定——CLIP 写真概率 + 分级共同决定
                         photo.isPortrait = main.portrait > 0.30 && level.rawValue >= ExposureLevel.portrait.rawValue
                         // 第三层用的裸露度：肤色为主，CLIP 裸露概率修正（无人体解析时的回退）
-                        let nudity = (main.probs["无胸罩"] ?? 0) + (main.probs["开裆"] ?? 0) +
-                                     (main.probs["全裸"] ?? 0) + 0.5 * (main.probs["比基尼"] ?? 0)
-                        photo.exposure = min(100, 100 * (0.68 * min(1, scores.skinRatio / 0.55) +
-                                                         0.32 * min(1, nudity * 2.0)))
+                        let nudity: Double = (main.probs["无胸罩"] ?? 0)
+                            + (main.probs["开裆"] ?? 0)
+                            + (main.probs["全裸"] ?? 0)
+                            + 0.5 * (main.probs["比基尼"] ?? 0)
+                        let skinPart: Double = 0.68 * min(1.0, scores.skinRatio / 0.55)
+                        let nudePart: Double = 0.32 * min(1.0, nudity * 2.0)
+                        photo.exposure = min(100.0, 100.0 * (skinPart + nudePart))
                     } else {
                         photo.mainTag = ClothingLadder.other.rawValue
                         photo.isPortrait = level.rawValue >= ExposureLevel.portrait.rawValue
