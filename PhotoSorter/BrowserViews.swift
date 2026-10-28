@@ -308,6 +308,18 @@ struct AllPhotosView: View {
                     }
                     .padding(.horizontal, 16).padding(.vertical, 10)
                 }
+                if let note = svc.rebindInfo {
+                    HStack(spacing: 6) {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .font(.caption).foregroundColor(.orange)
+                        Text(note).font(.caption).foregroundColor(.secondary)
+                        Spacer()
+                        Button("知道了") { svc.rebindInfo = nil }
+                            .font(.caption)
+                    }
+                    .padding(.horizontal, 16).padding(.vertical, 8)
+                    .background(Color(.systemGray6))
+                }
                 ScrollView {
                     PhotoGrid(ids: ids) { detailItem = PhotoSheetItem(id: $0) }
                     Color.clear.frame(height: 20)

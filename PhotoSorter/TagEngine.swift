@@ -248,7 +248,7 @@ final class TagEngine {
         normalize(&v)
 
         func best(_ prompts: [String]) -> Double {
-            prompts.compactMap { ladderEmbeddings[$0].map { dot(v, $0) } }.max() ?? -1
+            prompts.compactMap { ladderEmbeddings[$0].map { Double(dot(v, $0)) } }.max() ?? -1
         }
         // logits 用标准 CLIP 尺度（cosine x 100），softmax 后才有可比性
         var logits: [String: Double] = [:]
@@ -264,8 +264,8 @@ final class TagEngine {
         var bestName = "其他", bestP = -1.0
         for (n, p) in probs where n != "其他" { if p > bestP { bestP = p; bestName = n } }
 
-        let pos = Self.portraitPos.compactMap { ladderEmbeddings[$0].map { dot(v, $0) } }.max() ?? 0
-        let neg = Self.portraitNeg.compactMap { ladderEmbeddings[$0].map { dot(v, $0) } }.max() ?? 0
+        let pos = Self.portraitPos.compactMap { ladderEmbeddings[$0].map { Double(dot(v, $0)) } }.max() ?? 0
+        let neg = Self.portraitNeg.compactMap { ladderEmbeddings[$0].map { Double(dot(v, $0)) } }.max() ?? 0
         let pProbs = softmax([pos * 100.0, neg * 100.0])
 
         let tag = bestP >= Self.minConfidence ? bestName : "其他"

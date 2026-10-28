@@ -101,7 +101,8 @@ struct PhotoScores: Codable {
 }
 
 struct AnalyzedPhoto: Identifiable, Codable {
-    let id: String                   // PHAsset localIdentifier
+    /// 注意用 var：退出 iCloud 再登录后 localIdentifier 可能变化，重新绑定时要改 id
+    var id: String                   // PHAsset localIdentifier
     var scores: PhotoScores
     var level: ExposureLevel
     var parts: [BodyPart]
@@ -228,4 +229,12 @@ struct Overrides: Codable {
         return Overrides()
     }
     func save() { try? JSONEncoder().encode(self).write(to: Self.saveURL) }
+
+    /// 照片 ID 变了（退出 iCloud 重登等）时，把手工设置迁到新 ID 上
+    mutating func remapID(from old: String, to new: String) {
+        if let v = levelOverride.removeValue(forKey: old) { levelOverride[new] = v }
+        if let v = setMove.removeValue(forKey: old) { setMove[new] = v }
+        if let v = setRemove.removeValue(forKey: old) { setRemove[new] = v }
+        if let v = hidden.removeValue(forKey: old) { hidden[new] = v }
+    }
 }

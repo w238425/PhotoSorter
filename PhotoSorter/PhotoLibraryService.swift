@@ -25,6 +25,8 @@ final class PhotoLibraryService: ObservableObject {
     @Published var assets: [String: PHAsset] = [:]
     @Published var sets: [PhotoSet] = []
     @Published var hasData = false
+    /// 重新绑定结果提示（退出 iCloud 重登后 ID 变化用）
+    @Published var rebindInfo: String? = nil
     @Published var videoItems: [String: VideoItem] = [:]
     @Published var videoAssets: [String: PHAsset] = [:]
     @Published var thresholds: Thresholds = Thresholds.load() {
@@ -100,7 +102,12 @@ final class PhotoLibraryService: ObservableObject {
         let net = allowNetwork
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let self else { return }
+            self?.runScan(collections: cols, net: net)
+        }
+    }
+
+    /// 扫描主体：单独拆成方法，避免大闭包触发 Swift 类型检查超时
+    private func runScan(collections cols: [PHAssetCollection], net: Bool) {
 
             // 1. 拉取资产
             var assets: [PHAsset] = []
@@ -193,7 +200,6 @@ final class PhotoLibraryService: ObservableObject {
                 self.hasData = true
                 self.statusText = "完成：\(analyzed.count) 张照片，\(sets.count) 套"
                 self.saveCache()
-            }
         }
     }
 
@@ -654,6 +660,73 @@ final class PhotoLibraryService: ObservableObject {
         var creation: Date?
     }
 
+    // MARK: - 重新绑定（退出 iCloud 再登录后照片 ID 可能变化）
+
+    /// 纯元数据签名：拍摄时间(秒) + 像素尺寸。不加载图像、不触发下载。
+    private func sigKey(w: Int, h: Int, d: Date?) -> String {
+        let t = d.map { Int($0.timeIntervalSince1970) } ?? 0
+        return "\(t)_\(w)x\(h)"
+    }
+
+    /// 把「找不到资产」的旧记录用元数据签名重新绑到现有照片上。
+    /// 只在签名唯一命中时才绑定，多个候选不猜（避免绑错）。
+    private func rebindOrphans(metas: [String: AssetMeta]) {
+        let orphans = photos.keys.filter { assets[$0] == nil }
+        guard !orphans.isEmpty else { return }
+
+        // 全库影像资产索引：只读元数据，不下载、不占缓存
+        var index: [String: PHAsset] = [:]
+        var sigMap: [String: [String]] = [:]
+        func collect(_ fetch: PHFetchResult<PHAsset>) {
+            fetch.enumerateObjects { a, _, _ in
+                guard a.mediaType == .image else { return }
+                index[a.localIdentifier] = a
+                let k = self.sigKey(w: a.pixelWidth, h: a.pixelHeight, d: a.creationDate)
+                sigMap[k, default: []].append(a.localIdentifier)
+            }
+        }
+        collect(PHAsset.fetchAssets(with: .image, options: nil))
+        // iCloud 共享相册的资产不一定进全局 fetch，单独再扫一遍
+        PHAssetCollection.fetchAssetCollections(with: .album, subtype: .albumCloudShared, options: nil)
+            .enumerateObjects { col, _, _ in
+                collect(PHAsset.fetchAssets(in: col, options: nil))
+            }
+
+        var remap: [String: String] = [:]
+        for old in orphans {
+            guard let meta = metas[old] else { continue }
+            let k = sigKey(w: meta.w, h: meta.h, d: meta.creation)
+            guard let cands = sigMap[k], cands.count == 1 else { continue }
+            let new = cands[0]
+            if photos[new] == nil { remap[old] = new }   // 新 ID 已被占用则不覆盖
+        }
+        guard !remap.isEmpty else {
+            rebindInfo = "有 \(orphans.count) 张照片找不到对应（可能是真删除了）"
+            return
+        }
+
+        for (old, new) in remap {
+            if var rec = photos.removeValue(forKey: old) {
+                rec.id = new
+                photos[new] = rec
+            }
+            if let fp = fingerprints.removeValue(forKey: old) { fingerprints[new] = fp }
+            if let a = index[new] { assets[new] = a }
+            for i in sets.indices {
+                sets[i].photoIDs = sets[i].photoIDs.map { $0 == old ? new : $0 }
+                if sets[i].coverID == old { sets[i].coverID = new }
+            }
+            overrides.remapID(from: old, to: new)
+        }
+        overrides.save()
+        saveCache()
+
+        let left = orphans.count - remap.count
+        rebindInfo = left > 0
+            ? "已自动重新绑定 \(remap.count) 张照片，另有 \(left) 张未匹配（建议重新分析）"
+            : "已自动重新绑定 \(remap.count) 张照片（iCloud ID 已变化）"
+    }
+
     private var cacheURL: URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("analysis_cache.json")
@@ -686,6 +759,7 @@ final class PhotoLibraryService: ObservableObject {
                 _ = meta // 资产已删除的照片自然消失
             }
         }
+        rebindOrphans(metas: file.assetsMeta)
         photos = photos.filter { assets[$0.key] != nil }
         if let v = file.videoItems { videoItems = v }
         for id in videoItems.keys {
