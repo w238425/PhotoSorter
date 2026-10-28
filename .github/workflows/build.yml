@@ -55,6 +55,24 @@ jobs:
             exit 1
           fi
 
+      # 人体解析模型：分类准确率的地基。串行放进本 job 而不是单开一个 job，
+      # 避免多占一台 macOS 机器（上次就是排队 15 分钟被取消三次）。
+      - name: Convert human-parsing model
+        id: parsing
+        run: |
+          set +e
+          python3 -m pip install --quiet --upgrade pip
+          python3 -m pip install --quiet coremltools onnx onnxruntime onnxsim pillow
+          python3 tools/convert_parsing.py PhotoSorter/Resources/HumanParsing.mlpackage
+          code=$?
+          set -e
+          if [ $code -eq 0 ] && [ -d PhotoSorter/Resources/HumanParsing.mlpackage ]; then
+            echo "::notice::人体解析模型转换成功，已启用像素级证据"
+            python3 tools/inject_parsing_model.py project.yml
+          else
+            echo "::warning::人体解析模型转换失败，本次出包回退到 Vision 方案（分类精度下降但不影响使用）"
+          fi
+
       - name: Generate Xcode project
         run: |
           xcodegen generate

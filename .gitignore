@@ -1,1 +1,6 @@
 ann.json
+seg_fixed.onnx
+segformer.onnx
+verification/
+__pycache__/
+tools/__pycache__/

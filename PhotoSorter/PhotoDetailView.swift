@@ -54,6 +54,25 @@ struct PhotoDetailView: View {
                             tagPill(p.part.rawValue)
                             tagPill("裸露 \(Int(p.exposure))")
                             if let sid = p.setID { tagPill("同套 \(sid)") }
+                            if svc.overrides.tagOverride[currentID] != nil {
+                                tagPill("已手动")
+                            }
+                            Spacer()
+                            // 改分类：判错时手动纠正，同时训练对应类别的原型向量
+                            Menu {
+                                ForEach(ClothingLadder.orderedNames, id: \.self) { name in
+                                    Button(name) { svc.setMainTag(name, for: currentID) }
+                                }
+                                if svc.overrides.tagOverride[currentID] != nil {
+                                    Button("恢复自动判定") { svc.clearMainTagOverride(for: currentID) }
+                                }
+                            } label: {
+                                Image(systemName: "tag")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundColor(.white)
+                                    .padding(7)
+                                    .background(Circle().fill(Color.white.opacity(0.18)))
+                            }
                         }
                         Text(String(format: "质量 %.0f · 肤色 %.0f%% · 标签置信 %.0f%%",
                                     p.scores.aesthetic, p.scores.skinRatio * 100, p.tagConf * 100))

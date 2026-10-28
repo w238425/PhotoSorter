@@ -219,14 +219,32 @@ struct Overrides: Codable {
     var setMove: [String: Int] = [:]         // 照片ID -> 强制移入的套ID
     var setRemove: [String: Bool] = [:]      // 照片ID -> 强制移出所属套
     var hidden: [String: Bool] = [:]         // 照片ID -> App 内隐藏（共享相册无法真删）
+    var tagOverride: [String: String] = [:]  // 照片ID -> 用户指定的服装主标签
 
     static var saveURL: URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("overrides.json")
     }
     static func load() -> Overrides {
-        if let d = try? Data(contentsOf: saveURL), let o = try? JSONDecoder().decode(Overrides.self, from: d) { return o }
+        if let d = try? Data(contentsOf: saveURL) {
+            if let o = try? JSONDecoder().decode(Overrides.self, from: d) { return o }
+        }
         return Overrides()
+    }
+
+    /// 逐字段容错：旧版本缓存里没有 tagOverride，整体解码会失败，
+    /// 那样用户此前积累的隐藏/分级设置会一次性全丢。
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        levelOverride = try c.decodeIfPresent([String: Int].self, forKey: .levelOverride) ?? [:]
+        setMove = try c.decodeIfPresent([String: Int].self, forKey: .setMove) ?? [:]
+        setRemove = try c.decodeIfPresent([String: Bool].self, forKey: .setRemove) ?? [:]
+        hidden = try c.decodeIfPresent([String: Bool].self, forKey: .hidden) ?? [:]
+        tagOverride = try c.decodeIfPresent([String: String].self, forKey: .tagOverride) ?? [:]
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case levelOverride, setMove, setRemove, hidden, tagOverride
     }
     func save() { try? JSONEncoder().encode(self).write(to: Self.saveURL) }
 
@@ -236,5 +254,6 @@ struct Overrides: Codable {
         if let v = setMove.removeValue(forKey: old) { setMove[new] = v }
         if let v = setRemove.removeValue(forKey: old) { setRemove[new] = v }
         if let v = hidden.removeValue(forKey: old) { hidden[new] = v }
+        if let v = tagOverride.removeValue(forKey: old) { tagOverride[new] = v }
     }
 }

@@ -128,17 +128,35 @@ final class PhotoLibraryService: ObservableObject {
                 let id = asset.localIdentifier
                 if let img = analyzer.image(for: asset, maxPixel: 512, allowNetwork: net) {
                     let scores = analyzer.analyze(img)
+
+                    // 人体定位：关节切出上身/下身/腿/裆部，供 CLIP 分区域编码
+                    let det = BodyRegionDetector.shared.detect(img)
+                    // 像素级人体解析：把「穿没穿衣服」变成可测量的事实。
+                    // 只有画面里确实有人才值得跑——风景/食物/截图直接跳过，
+                    // 解析模型是单张耗时的大头，这样能省下大部分时间。
+                    let parse = det.personArea >= 0.05 ? HumanParsing.shared.parse(img) : nil
+                    let personArea = parse?.personArea ?? det.personArea
+
                     // 一次图像编码同时拿到主标签、写真概率和精细标签
-                    let main = TagEngine.shared.classifyMain(img)
+                    let main = TagEngine.shared.classifyMain(img, regions: det.regions,
+                                                             parse: parse,
+                                                             personArea: personArea,
+                                                             skinInPerson: det.skinInPerson)
                     let tags = main?.tags ?? []
                     var level = self.classifyLevel(scores, tags: tags)
                     if let lv = self.overrides.levelOverride[id] {
                         level = ExposureLevel(rawValue: lv) ?? level
                     }
-                    let parts = analyzer.detectBodyParts(img)
+                    let parts = self.resolveParts(analyzer: analyzer, img: img, parse: parse)
                     var photo = AnalyzedPhoto(id: id, scores: scores, level: level,
                                               parts: parts, tags: tags)
-                    self.applyMainTag(main, to: &photo, scores: scores, level: level)
+                    self.applyMainTag(main, to: &photo, scores: scores, level: level,
+                                      parse: parse, skinInPerson: det.skinInPerson)
+                    // 手工指定永远压过自动判定
+                    if let forced = self.overrides.tagOverride[id] {
+                        photo.mainTag = forced
+                        photo.tagConf = 1.0
+                    }
                     analyzed[id] = photo
                     assetMap[id] = asset
                     if let fp = analyzer.featurePrint(img) { fps[id] = fp }
@@ -188,28 +206,102 @@ final class PhotoLibraryService: ObservableObject {
         }
     }
 
+    /// 部位判定：有人体解析时按像素比例裁决，否则回退到启发式
+    private func resolveParts(analyzer: AestheticAnalyzer, img: CGImage,
+                              parse: HumanParsing.Result?) -> [BodyPart] {
+        guard let p = parse, p.personArea >= 0.005 else {
+            return analyzer.detectBodyParts(img)
+        }
+        let lower = p.pantsRatio + p.shoeRatio
+        if p.faceRatio > 0.30 { return [.face] }
+        if p.legRatio > 0.40 && p.upperRatio < 0.10 { return [.lower] }
+        if p.shoeRatio > 0.30 && p.legRatio < 0.20 && p.upperRatio < 0.15 { return [.feet] }
+        if lower > 0.38 && p.upperRatio < 0.12 { return [.lower] }
+        if p.faceRatio > 0.015 && p.upperRatio > 0.08 && (lower > 0.10 || p.legRatio > 0.10) {
+            return [.full]
+        }
+        if lower < 0.05 && p.legRatio < 0.12 && p.faceRatio < 0.30 { return [.upper] }
+        return [.full]
+    }
+
+    /// 把区间 [low, high] 线性映射到 0~1
+    private func mapExposure(_ v: Double, low: Double, high: Double) -> Double {
+        let x = (v - low) / max(high - low, 0.001)
+        return max(0.0, min(1.0, x))
+    }
+
     /// 把 CLIP 主标签结论写进记录。单独成方法：大函数里的复合表达式会拖垮 Swift 类型检查。
     private func applyMainTag(_ main: TagEngine.MainTagResult?,
                               to photo: inout AnalyzedPhoto,
                               scores: PhotoScores,
-                              level: ExposureLevel) {
+                              level: ExposureLevel,
+                              parse: HumanParsing.Result?,
+                              skinInPerson: Double?) {
+        // 裸露度的证据优先级：解析的裸皮像素 > 人物掩码内的肤色 > 整图肤色启发式
+        var base: Double
+        var reliable: Bool
+        if let p = parse {
+            base = mapExposure(p.exposure, low: 0.12, high: 0.75)
+            reliable = true
+        } else if let s = skinInPerson {
+            base = mapExposure(s, low: 0.20, high: 0.70)
+            reliable = true
+        } else {
+            base = min(1.0, scores.skinRatio / 0.55)
+            reliable = false
+        }
+
         guard let main = main else {
             photo.mainTag = ClothingLadder.other.rawValue
             photo.isPortrait = level.rawValue >= ExposureLevel.portrait.rawValue
-            photo.exposure = min(100.0, 100.0 * min(1.0, scores.skinRatio / 0.55))
+            photo.exposure = min(100.0, 100.0 * base)
             return
         }
         photo.mainTag = main.tag
         photo.tagConf = main.conf
-        // 第一层：写真判定——CLIP 写真概率 + 分级共同决定
-        photo.isPortrait = main.portrait > 0.30 && level.rawValue >= ExposureLevel.portrait.rawValue
-        // 第三层用的裸露度：肤色为主，CLIP 裸露概率修正（无人体解析时的回退）
+        // 第一层：写真判定——CLIP 写真分 + 有人 + 非人像内容不占优
+        photo.isPortrait = main.portraitQualified && level.rawValue >= ExposureLevel.portrait.rawValue
+        // 第三层用的裸露度：像素证据为主，CLIP 裸露概率只做小幅修正
         // 用小函数取值：避免 4 段「字典下标 + ??」连写拖垮类型检查
         func prob(_ k: String) -> Double { main.probs[k] ?? 0 }
         let nudity: Double = prob("无胸罩") + prob("开裆") + prob("全裸") + 0.5 * prob("比基尼")
-        let skinPart: Double = 0.68 * min(1.0, scores.skinRatio / 0.55)
-        let nudePart: Double = 0.32 * min(1.0, nudity * 2.0)
-        photo.exposure = min(100.0, 100.0 * (skinPart + nudePart))
+        let w = reliable ? 0.18 : 0.32
+        let clipPart: Double = w * min(1.0, nudity * 2.0)
+        photo.exposure = min(100.0, 100.0 * (base * (1 - w) + clipPart))
+    }
+
+    // MARK: - 手动纠错（顺带训练原型）
+
+    /// 用户把某张照片改判为另一个服装主标签：立即生效，并让该类原型向它靠拢
+    func setMainTag(_ tag: String, for id: String) {
+        var o = overrides
+        o.tagOverride[id] = tag
+        o.save()
+        DispatchQueue.main.async {
+            self.overrides = o
+            if var p = self.photos[id] {
+                p.mainTag = tag
+                p.tagConf = 1.0
+                self.photos[id] = p
+            }
+            self.saveCache()
+            // 原型学习：重新取图编码一次，让后续同类照片自动跟着改
+            let asset = self.assets[id]
+            DispatchQueue.global(qos: .utility).async {
+                guard let asset,
+                      let img = AestheticAnalyzer.shared.image(for: asset, maxPixel: 512,
+                                                               allowNetwork: false),
+                      let v = TagEngine.shared.imageVector(img) else { return }
+                TagEngine.shared.updatePrototype(tag: tag, vec: v)
+            }
+        }
+    }
+
+    func clearMainTagOverride(for id: String) {
+        var o = overrides
+        o.tagOverride.removeValue(forKey: id)
+        o.save()
+        DispatchQueue.main.async { self.overrides = o; self.saveCache() }
     }
 
     private func ui(_ block: @escaping () -> Void) {
