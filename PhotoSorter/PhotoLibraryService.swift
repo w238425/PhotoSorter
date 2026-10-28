@@ -138,25 +138,7 @@ final class PhotoLibraryService: ObservableObject {
                     let parts = analyzer.detectBodyParts(img)
                     var photo = AnalyzedPhoto(id: id, scores: scores, level: level,
                                               parts: parts, tags: tags)
-                    // 第二层：服装主标签（唯一归属 + softmax 置信度）
-                    if let main = main {
-                        photo.mainTag = main.tag
-                        photo.tagConf = main.conf
-                        // 第一层：写真判定——CLIP 写真概率 + 分级共同决定
-                        photo.isPortrait = main.portrait > 0.30 && level.rawValue >= ExposureLevel.portrait.rawValue
-                        // 第三层用的裸露度：肤色为主，CLIP 裸露概率修正（无人体解析时的回退）
-                        let nudity: Double = (main.probs["无胸罩"] ?? 0)
-                            + (main.probs["开裆"] ?? 0)
-                            + (main.probs["全裸"] ?? 0)
-                            + 0.5 * (main.probs["比基尼"] ?? 0)
-                        let skinPart: Double = 0.68 * min(1.0, scores.skinRatio / 0.55)
-                        let nudePart: Double = 0.32 * min(1.0, nudity * 2.0)
-                        photo.exposure = min(100.0, 100.0 * (skinPart + nudePart))
-                    } else {
-                        photo.mainTag = ClothingLadder.other.rawValue
-                        photo.isPortrait = level.rawValue >= ExposureLevel.portrait.rawValue
-                        photo.exposure = min(100, 100 * min(1, scores.skinRatio / 0.55))
-                    }
+                    self.applyMainTag(main, to: &photo, scores: scores, level: level)
                     analyzed[id] = photo
                     assetMap[id] = asset
                     if let fp = analyzer.featurePrint(img) { fps[id] = fp }
@@ -204,6 +186,31 @@ final class PhotoLibraryService: ObservableObject {
                 self.statusText = "完成：\(analyzed.count) 张照片，\(sets.count) 套"
                 self.saveCache()
         }
+    }
+
+    /// 把 CLIP 主标签结论写进记录。单独成方法：大函数里的复合表达式会拖垮 Swift 类型检查。
+    private func applyMainTag(_ main: TagEngine.MainTagResult?,
+                              to photo: inout AnalyzedPhoto,
+                              scores: PhotoScores,
+                              level: ExposureLevel) {
+        guard let main = main else {
+            photo.mainTag = ClothingLadder.other.rawValue
+            photo.isPortrait = level.rawValue >= ExposureLevel.portrait.rawValue
+            photo.exposure = min(100.0, 100.0 * min(1.0, scores.skinRatio / 0.55))
+            return
+        }
+        photo.mainTag = main.tag
+        photo.tagConf = main.conf
+        // 第一层：写真判定——CLIP 写真概率 + 分级共同决定
+        photo.isPortrait = main.portrait > 0.30 && level.rawValue >= ExposureLevel.portrait.rawValue
+        // 第三层用的裸露度：肤色为主，CLIP 裸露概率修正（无人体解析时的回退）
+        let nudity: Double = (main.probs["无胸罩"] ?? 0)
+            + (main.probs["开裆"] ?? 0)
+            + (main.probs["全裸"] ?? 0)
+            + 0.5 * (main.probs["比基尼"] ?? 0)
+        let skinPart: Double = 0.68 * min(1.0, scores.skinRatio / 0.55)
+        let nudePart: Double = 0.32 * min(1.0, nudity * 2.0)
+        photo.exposure = min(100.0, 100.0 * (skinPart + nudePart))
     }
 
     private func ui(_ block: @escaping () -> Void) {
