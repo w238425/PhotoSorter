@@ -62,8 +62,9 @@ final class BodyRegionDetector {
 
         // 2. 人物掩码
         var maskImage: CGImage?
-        if let result = segReq.results?.first,
-           let buf = result.pixelBuffer {
+        if let result = segReq.results?.first {
+            // pixelBuffer 不是 Optional，不能用条件绑定
+            let buf = result.pixelBuffer
             maskImage = Self.cgImage(fromMask: buf)
             personArea = Self.maskCoverage(buf)
         }
@@ -181,12 +182,13 @@ final class BodyRegionDetector {
         guard let base = CVPixelBufferGetBaseAddress(buf) else { return 0 }
         let w = CVPixelBufferGetWidth(buf)
         let h = CVPixelBufferGetHeight(buf)
-        let stride = CVPixelBufferGetBytesPerRow(buf)
+        // 变量不能叫 stride：会遮蔽标准库的 stride(from:to:by:)
+        let bytesPerRow = CVPixelBufferGetBytesPerRow(buf)
         let step = max(1, w / 128)          // 采样，不必逐像素
         var hit = 0
         var total = 0
         for y in stride(from: 0, to: h, by: max(1, h / 128)) {
-            let row = base.advanced(by: y * stride)
+            let row = base.advanced(by: y * bytesPerRow)
             for x in stride(from: 0, to: w, by: step) {
                 total += 1
                 if row.load(fromByteOffset: x, as: UInt8.self) > 128 { hit += 1 }

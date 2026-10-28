@@ -232,6 +232,9 @@ struct Overrides: Codable {
         return Overrides()
     }
 
+    /// 自定义 init 会让编译器停止合成无参 init，这里必须显式补回来
+    init() {}
+
     /// 逐字段容错：旧版本缓存里没有 tagOverride，整体解码会失败，
     /// 那样用户此前积累的隐藏/分级设置会一次性全丢。
     init(from decoder: Decoder) throws {

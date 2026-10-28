@@ -4,3 +4,4 @@ segformer.onnx
 verification/
 __pycache__/
 tools/__pycache__/
+.venv-parsing/

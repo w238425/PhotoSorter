@@ -61,9 +61,11 @@ jobs:
         id: parsing
         run: |
           set +e
-          python3 -m pip install --quiet --upgrade pip
-          python3 -m pip install --quiet coremltools onnx onnxruntime onnxsim pillow
-          python3 tools/convert_parsing.py PhotoSorter/Resources/HumanParsing.mlpackage
+          # runner 的 Python 是受管环境（PEP 668），直接 pip install 会被拒，必须用 venv
+          python3 -m venv .venv-parsing
+          .venv-parsing/bin/pip install --quiet --upgrade pip
+          .venv-parsing/bin/pip install --quiet coremltools onnx onnxruntime onnxsim pillow
+          .venv-parsing/bin/python tools/convert_parsing.py PhotoSorter/Resources/HumanParsing.mlpackage
           code=$?
           set -e
           if [ $code -eq 0 ] && [ -d PhotoSorter/Resources/HumanParsing.mlpackage ]; then
